@@ -22,11 +22,11 @@ Zonder schema worden https én http geprobeerd. Exit-code `2` als er iets kwetsb
 |---|---|
 | `-f FILE` | targets uit bestand, één per regel (`#` = commentaar) |
 | `-o FILE` / `--csv FILE` | JSON- / CSV-rapport |
+| `--fetch-fixed` | laatste releases per branch live van php.net ophalen en als gefixte versies gebruiken |
 | `--fixed 8.4=8.4.27` | gefixte versie per branch overschrijven (herhaalbaar) |
 | `--path /x.php` | extra pad proberen (herhaalbaar) |
 | `host@IP` / `--origin IP` | rechtstreeks naar het origin-IP verbinden, met de echte hostnaam in Host/SNI (omzeilt CDN/WAF) |
 | `--no-behaviour` | gedragsfingerprints overslaan |
-| `--no-apps` | app-herkenning en exposure-checks overslaan |
 | `--quick` | alleen `/` en `/index.php` |
 | `-t`, `-c`, `--delay` | timeout, gelijktijdigheid, pauze tussen requests |
 | `--insecure` | TLS-certificaten niet valideren |
@@ -54,29 +54,6 @@ Een edge (Cloudflare, Akamai, Sucuri, Imperva, CloudFront, Fastly, Azure Front D
    Gebruik `--insecure` als het origin-certificaat niet op de hostnaam past. Werkt dit niet, dan
    accepteert je origin alleen verkeer van de CDN (goed!) en moet je intern met `php -v` kijken.
 
-## Herkenning van PHP-omgevingen
-
-Ook zonder zichtbare PHP-versie herkent de scanner ~45 bekende PHP-applicaties aan cookies,
-headers, generator-tags en vaste paden, zodat je een inventaris krijgt van wát er op PHP draait
-(en dus gepatcht moet worden). Waar mogelijk wordt ook de app-versie uitgelezen.
-
-CMS/e-commerce: WordPress (+WooCommerce), Drupal, Joomla, TYPO3, Magento, PrestaShop, OpenCart,
-Shopware, Craft, Statamic, OctoberCMS/Winter, Concrete, SilverStripe, Grav, Kirby, ProcessWire, Bolt.
-Frameworks: Laravel, Symfony, CodeIgniter, CakePHP, Yii, Zend/Laminas.
-Overig: Nextcloud/ownCloud, phpMyAdmin, Adminer, Roundcube, Matomo, MediaWiki, Moodle, phpBB,
-XenForo, vBulletin, MyBB, Zabbix, GLPI, Dolibarr, SuiteCRM, Mautic, LimeSurvey, osTicket, Elgg,
-Plesk/ISPConfig/Froxlor, cPanel.
-
-Nieuwe signatures voeg je toe in `APP_SIGNATURES` (één dict per app).
-
-### Exposure-checks
-
-Daarnaast wordt gemeld (alleen aanwezigheid, inhoud wordt niet getoond) als deze bestanden
-publiek staan: `/.env`, `composer.json`, `composer.lock`, `vendor/composer/installed.json`,
-`.git/HEAD`, `wp-config.php.bak`, `config.php.bak`, Apache `/server-status`, `.user.ini`, en
-publiek bereikbare phpMyAdmin/Adminer. Een composer-bestand geeft bovendien een hint over de
-vereiste PHP-branch.
-
 ## Statussen
 
 - `KWETSBAAR` – versie zichtbaar en lager dan de fix
@@ -90,8 +67,15 @@ vereiste PHP-branch.
 
 ## Gefixte versies
 
-Ingebouwd: 8.5.12 / 8.4.27 / 8.3.36 / 8.2.35. Controleer de officiële nummers op
-<https://www.php.net/> en overschrijf zo nodig met `--fixed`.
+Ingebouwd: 8.5.12 / 8.4.27 / 8.3.36 / 8.2.35 (de bij de release-aankondiging verwachte nummers).
+Met `--fetch-fixed` haalt de scanner per branch de laatste release op van de officiële php.net
+release-feed en gebruikt die als hij nieuwer is dan de ingebouwde waarde. Meldt php.net nog een
+oudere versie (release nog niet uit) of is php.net onbereikbaar, dan blijft de ingebouwde waarde
+staan en zie je dat in het rapport. Handmatig overschrijven kan altijd met `--fixed 8.4=8.4.27`.
+
+Let op: Linux-distro's (Debian, Ubuntu, RHEL) backporten fixes vaak zónder het versienummer te
+verhogen. Een `KWETSBAAR`-melding op een distro-pakket betekent dus: controleer op de server zelf
+met `apt changelog php8.x-fpm | grep CVE-2026-10961` of `rpm -q --changelog php-fpm | grep CVE-2026-10961`.
 
 ## Disclaimer
 
