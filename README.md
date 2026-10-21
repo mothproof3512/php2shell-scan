@@ -93,13 +93,13 @@ versie-fingerprinting; een "schoon" resultaat is geen garantie dat PHP niet draa
   ## Workflow voor grotere netwerken.
 
   ### 1. Webpoorten vinden
-```
+```bash
 nmap -iL ips.txt -p 80,443,8080,8443,8000,8008,8081,8888,9443,4443 \
      -PS80,443,8080,8443 --open -n -T4 -oA webservices
 ```
 
 ### 2. Schema afleiden uit poortnummer (onbekende poort: beide proberen)
-```
+```bash
 grep "/open/tcp/" webservices.gnmap \
 | awk '{ip=$2; for(i=1;i<=NF;i++) if($i ~ /\/open\/tcp\//){split($i,a,"/"); p=a[1];
     if(p==443||p==8443||p==9443||p==4443) print "https://"ip":"p;
@@ -109,11 +109,13 @@ grep "/open/tcp/" webservices.gnmap \
 ```
 
 ### 3. Hostnamen per IP (hosthunter) → scanner-notatie domein@IP
-```
+```bash
 awk '/open/ {print $2}' webservices.gnmap | sort -u > live_ips.txt
 ```
-
+```
 python3 hosthunter.py live_ips.txt -f csv -o hosthunter.csv
+```
+
 ####   kolommen: ip, hostnames (komma-gescheiden)
 ```
 awk -F, 'NR>1 && $2!="" {n=split($2,h,";|,"); for(i=1;i<=n;i++){gsub(/ /,"",h[i]); if(h[i]!="") print h[i]"@"$1}}' \
@@ -124,7 +126,7 @@ awk -F, 'NR>1 && $2!="" {n=split($2,h,";|,"); for(i=1;i<=n;i++){gsub(/ /,"",h[i]
 ### 4. Aanvullen met eigen bronnen (dit vindt hosthunter niet)
     - DNS-export uit je eigen zones: alle A/AAAA/CNAME → naam@IP
     - SAN-namen uit de certificaten op elk https-endpoint:
-```
+```bash
 grep '^https' hosts_ip.txt | while read u; do
   hp=${u#https://}; ip=${hp%%:*}; port=${hp##*:}
   echo | timeout 5 openssl s_client -connect "$ip:$port" 2>/dev/null \
@@ -134,10 +136,12 @@ done | sed 's/:443@/@/' | sort -u > hosts_san.txt
 ```
 
 ### 5. Samenvoegen: hostnamen met origin-IP + de kale IP's (default vhost)
-```cat hosts_vhost.txt hosts_san.txt hosts_ip.txt | sort -u > livehosts.txt```
+```bash
+cat hosts_vhost.txt hosts_san.txt hosts_ip.txt | sort -u > livehosts.txt
+```
 
 ### 6. PHP2Shell-scan
-```
+```python
 python3 php2shell_scan.py -f livehosts.txt --fetch-fixed --insecure --rps 5 -c 10 \
         -o rapport.json --csv rapport.csv
 ```
