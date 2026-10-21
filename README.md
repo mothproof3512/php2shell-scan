@@ -24,15 +24,41 @@ Zonder schema worden https én http geprobeerd. Exit-code `2` als er iets kwetsb
 | `-o FILE` / `--csv FILE` | JSON- / CSV-rapport |
 | `--fixed 8.4=8.4.27` | gefixte versie per branch overschrijven (herhaalbaar) |
 | `--path /x.php` | extra pad proberen (herhaalbaar) |
+| `host@IP` / `--origin IP` | rechtstreeks naar het origin-IP verbinden, met de echte hostnaam in Host/SNI (omzeilt CDN/WAF) |
+| `--no-behaviour` | gedragsfingerprints overslaan |
 | `--quick` | alleen `/` en `/index.php` |
 | `-t`, `-c`, `--delay` | timeout, gelijktijdigheid, pauze tussen requests |
 | `--insecure` | TLS-certificaten niet valideren |
+
+## Achter een CDN, WAF of reverse proxy?
+
+Een edge (Cloudflare, Akamai, Sucuri, Imperva, CloudFront, Fastly, Azure Front Door, …) stript meestal
+`X-Powered-By` en andere versie-headers. De scanner doet daar drie dingen tegen:
+
+1. **Edge-detectie** – herkent de CDN/WAF aan zijn headers en meldt `GEMASKEERD` in plaats van een
+   vals "geen PHP gezien".
+2. **Gedragsfingerprints** die een proxy niet verwijdert: PHP's vaste `Expires: Thu, 19 Nov 1981`
+   sessieheader, php-fpm's `File not found.` / PHP-CGI's `No input file specified` op een
+   niet-bestaand `.php`-pad, verschil in afhandeling tussen `.php` en `.txt`, en de PHP easter egg
+   (bewijst PHP < 5.5 = EOL).
+3. **Origin direct scannen** – jij kent je eigen origin-IP's. Met `host@IP` verbindt de scanner
+   rechtstreeks met de server achter de edge, met de juiste `Host`-header en SNI, en ziet wat de
+   proxy anders wegfiltert:
+
+   ```bash
+   python3 php2shell_scan.py www.example.nl@203.0.113.10
+   python3 php2shell_scan.py -f hosts.txt --origin 203.0.113.10
+   ```
+
+   Gebruik `--insecure` als het origin-certificaat niet op de hostnaam past. Werkt dit niet, dan
+   accepteert je origin alleen verkeer van de CDN (goed!) en moet je intern met `php -v` kijken.
 
 ## Statussen
 
 - `KWETSBAAR` – versie zichtbaar en lager dan de fix
 - `KWETSBAAR-EOL` – PHP 5.x / 7.x / 8.0 / 8.1: krijgt geen patch, alleen upgraden helpt
 - `WAARSCHIJNLIJK-KWETSBAAR` – alleen de branch (bv. `8.4`) zichtbaar, patchniveau onbekend
+- `GEMASKEERD` – achter een CDN/WAF, versie onzichtbaar; scan de origin met `host@IP`
 - `GEPATCHT` – versie ≥ gefixte release
 - `ONBEKEND` / `GEEN-PHP-GEZIEN` – **niet** hetzelfde als veilig: veel servers verbergen de
   versie (`expose_php=Off`, reverse proxy, WAF). Controleer die hosts intern met `php -v` /
