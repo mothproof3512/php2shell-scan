@@ -1,0 +1,3 @@
+# één target per regel
+# example.nl
+# https://www.example.nl
