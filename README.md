@@ -92,50 +92,51 @@ versie-fingerprinting; een "schoon" resultaat is geen garantie dat PHP niet draa
 
   ## Workflow voor grotere netwerken.
 
-  # 1. Webpoorten vinden
-nmap -iL ips.txt -p 80,443,8080,8443,8000,8008,8081,8888,9443,4443 \
-     -PS80,443,8080,8443 --open -n -T4 -oA webservices
+  ### 1. Webpoorten vinden
+``nmap -iL ips.txt -p 80,443,8080,8443,8000,8008,8081,8888,9443,4443 \
+     -PS80,443,8080,8443 --open -n -T4 -oA webservices``
 
-# 2. Schema afleiden uit poortnummer (onbekende poort: beide proberen)
-grep "/open/tcp/" webservices.gnmap \
+### 2. Schema afleiden uit poortnummer (onbekende poort: beide proberen)
+```grep "/open/tcp/" webservices.gnmap \
 | awk '{ip=$2; for(i=1;i<=NF;i++) if($i ~ /\/open\/tcp\//){split($i,a,"/"); p=a[1];
     if(p==443||p==8443||p==9443||p==4443) print "https://"ip":"p;
     else if(p==80||p==8080||p==8000||p==8008||p==8081||p==8888) print "http://"ip":"p;
     else {print "https://"ip":"p; print "http://"ip":"p}}}' \
-| sort -u > hosts_ip.txt
+| sort -u > hosts_ip.txt```
 
-# 3. Hostnamen per IP (hosthunter) → scanner-notatie domein@IP
-awk '/open/ {print $2}' webservices.gnmap | sort -u > live_ips.txt
+### 3. Hostnamen per IP (hosthunter) → scanner-notatie domein@IP
+```awk '/open/ {print $2}' webservices.gnmap | sort -u > live_ips.txt```
+
 python3 hosthunter.py live_ips.txt -f csv -o hosthunter.csv
-#   kolommen: ip, hostnames (komma-gescheiden)
-awk -F, 'NR>1 && $2!="" {n=split($2,h,";|,"); for(i=1;i<=n;i++){gsub(/ /,"",h[i]); if(h[i]!="") print h[i]"@"$1}}' \
-    hosthunter.csv | sort -u > hosts_vhost.txt
-#   let op: pas de kolomnummers aan op jouw hosthunter-versie; check met: head -3 hosthunter.csv
+####   kolommen: ip, hostnames (komma-gescheiden)
+```awk -F, 'NR>1 && $2!="" {n=split($2,h,";|,"); for(i=1;i<=n;i++){gsub(/ /,"",h[i]); if(h[i]!="") print h[i]"@"$1}}' \
+    hosthunter.csv | sort -u > hosts_vhost.txt```
+   let op: pas de kolomnummers aan op jouw hosthunter-versie; check met: head -3 hosthunter.csv
 
-# 4. Aanvullen met eigen bronnen (dit vindt hosthunter niet)
-#    - DNS-export uit je eigen zones: alle A/AAAA/CNAME → naam@IP
-#    - SAN-namen uit de certificaten op elk https-endpoint:
-grep '^https' hosts_ip.txt | while read u; do
+### 4. Aanvullen met eigen bronnen (dit vindt hosthunter niet)
+    - DNS-export uit je eigen zones: alle A/AAAA/CNAME → naam@IP
+    - SAN-namen uit de certificaten op elk https-endpoint:
+```grep '^https' hosts_ip.txt | while read u; do
   hp=${u#https://}; ip=${hp%%:*}; port=${hp##*:}
   echo | timeout 5 openssl s_client -connect "$ip:$port" 2>/dev/null \
   | openssl x509 -noout -ext subjectAltName 2>/dev/null \
   | grep -o 'DNS:[^,]*' | sed "s/DNS://; s/^\*\.//; s|\$|:$port@$ip|"
-done | sed 's/:443@/@/' | sort -u > hosts_san.txt
+done | sed 's/:443@/@/' | sort -u > hosts_san.txt```
 
-# 5. Samenvoegen: hostnamen met origin-IP + de kale IP's (default vhost)
-cat hosts_vhost.txt hosts_san.txt hosts_ip.txt | sort -u > livehosts.txt
+### 5. Samenvoegen: hostnamen met origin-IP + de kale IP's (default vhost)
+```cat hosts_vhost.txt hosts_san.txt hosts_ip.txt | sort -u > livehosts.txt```
 
-# 6. PHP2Shell-scan
-python3 php2shell_scan.py -f livehosts.txt --fetch-fixed --insecure --rps 5 -c 10 \
-        -o rapport.json --csv rapport.csv
+### 6. PHP2Shell-scan
+```python3 php2shell_scan.py -f livehosts.txt --fetch-fixed --insecure --rps 5 -c 10 \
+        -o rapport.json --csv rapport.csv```
 
-# 7. Triage
-#    KWETSBAAR / KWETSBAAR-EOL  → direct patchen/upgraden, ook php-fpm/Apache herstarten
-#    GEMASKEERD / ONBEKEND / GEEN-PHP-GEZIEN → naar de serverkant (stap 8), niet afvinken
-#    ONBEREIKBAAR op https én http → poort open maar geen HTTP; negeren of handmatig kijken
+### 7. Triage
+    KWETSBAAR / KWETSBAAR-EOL  → direct patchen/upgraden, ook php-fpm/Apache herstarten
+    GEMASKEERD / ONBEKEND / GEEN-PHP-GEZIEN → naar de serverkant (stap 8), niet afvinken
+    ONBEREIKBAAR op https én http → poort open maar geen HTTP; negeren of handmatig kijken
 
-# 8. Serverkant voor alles wat extern niet eenduidig is (of gewoon voor alles)
-#    Debian/Ubuntu:  dpkg -l 'php*' ; apt changelog php8.x-fpm | grep -E 'CVE-2026-10961[89]'
-#    RHEL-familie:   rpm -qa 'php*' ; rpm -q --changelog php-fpm | grep -E 'CVE-2026-10961[89]'
-#    Herstart:       ps -o lstart= -p $(pgrep -o php-fpm) vergelijken met pakket-installtijd
-#    Containers:     docker ps + docker exec <c> php -v ; images rebuilden, niet alleen patchen
+### 8. Serverkant voor alles wat extern niet eenduidig is (of gewoon voor alles)
+    Debian/Ubuntu:  dpkg -l 'php*' ; apt changelog php8.x-fpm | grep -E 'CVE-2026-10961[89]'
+    RHEL-familie:   rpm -qa 'php*' ; rpm -q --changelog php-fpm | grep -E 'CVE-2026-10961[89]'
+    Herstart:       ps -o lstart= -p $(pgrep -o php-fpm) vergelijken met pakket-installtijd
+    Containers:     docker ps + docker exec <c> php -v ; images rebuilden, niet alleen patchen
