@@ -56,10 +56,6 @@ PROBE_PATHS = [
     "/test.php",
     "/i.php",
     "/pi.php",
-    "/wp-login.php",          # WordPress
-    "/administrator/",        # Joomla
-    "/user/login",            # Drupal
-    "/magento_version",       # Magento
 ]
 
 # PHP easter egg (werkt alleen op PHP < 5.5 → bewijst een EOL-versie)
@@ -69,7 +65,7 @@ VERSION_RE = re.compile(r"PHP/?\s*v?(\d+\.\d+(?:\.\d+)?)", re.IGNORECASE)
 PHPINFO_RE = re.compile(r"PHP Version\s*(?:</[^>]+>\s*)*<[^>]*>?\s*(\d+\.\d+\.\d+)", re.IGNORECASE)
 PHPINFO_RE2 = re.compile(r"PHP Version\s+(\d+\.\d+\.\d+)", re.IGNORECASE)
 
-UA = "php2shell-scan/1.1 (eigen-oppervlak controle; CVE-2026-109618/109619)"
+UA = "php2shell-scan/1.2 (eigen-oppervlak controle; CVE-2026-109618/109619)"
 
 # CDN / WAF / reverse-proxy herkenning op basis van response headers
 EDGE_SIGNATURES = [
@@ -177,6 +173,131 @@ def fetch(base, path, timeout, insecure, origin_ip=None, max_bytes=200_000, max_
     return status, headers, body
 
 
+# ---------------------------------------------------------------------------
+# Bekende PHP-omgevingen. Elke signature: naam, cookies (letterlijke substrings
+# in Set-Cookie, of "re:<regex>"), headers {naam: substring}, body (regexen), paths (extra
+# GET-paden die de app bevestigen; "pad": regex-op-body of None),
+# version (regex met groep 1 = app-versie, toegepast op alle bodies).
+# ---------------------------------------------------------------------------
+APP_SIGNATURES = [
+    {"name": "WordPress", "cookies": ["wordpress_", "wp-settings-"],
+     "body": [r"/wp-content/", r"/wp-includes/", r'name="generator" content="WordPress'],
+     "paths": {"/wp-login.php": r"wp-submit|wordpress", "/wp-json/": r'"namespaces"'},
+     "version": r'name="generator" content="WordPress ([\d.]+)'},
+    {"name": "WooCommerce", "cookies": ["woocommerce_"], "body": [r"/plugins/woocommerce/", r"woocommerce-"]},
+    {"name": "Drupal", "cookies": ["re:SESS[0-9a-f]{32}", "SSESS"], "headers": {"x-generator": "Drupal", "x-drupal-cache": ""},
+     "body": [r"/sites/default/files/", r"drupalSettings", r"Drupal\.settings"],
+     "paths": {"/core/CHANGELOG.txt": r"Drupal", "/CHANGELOG.txt": r"Drupal"},
+     "version": r"X-Generator: Drupal ([\d.]+)|Drupal ([\d.]+),"},
+    {"name": "Joomla", "body": [r'name="generator" content="Joomla', r"/media/jui/", r"/media/system/js/"],
+     "paths": {"/administrator/": r"joomla", "/administrator/manifests/files/joomla.xml": r"<version>"},
+     "version": r"<version>([\d.]+)</version>"},
+    {"name": "Magento", "cookies": ["X-Magento-Vary", "mage-cache-", "form_key"],
+     "body": [r"/static/version\d+/", r"Magento_", r"mage/"],
+     "paths": {"/magento_version": r"Magento"},
+     "version": r"Magento/([\d.]+)"},
+    {"name": "Laravel", "cookies": ["laravel_session", "XSRF-TOKEN"], "body": [r"laravel", r"Illuminate\\"]},
+    {"name": "Symfony", "cookies": ["sf_redirect", "PHPSESSID"], "headers": {"x-debug-token": "", "x-symfony-cache": ""},
+     "paths": {"/_profiler/": r"Symfony|profiler", "/_wdt/": r"Symfony"}},
+    {"name": "CodeIgniter", "cookies": ["ci_session"]},
+    {"name": "CakePHP", "cookies": ["CAKEPHP"]},
+    {"name": "Yii", "cookies": ["_csrf", "YII_CSRF_TOKEN", "_identity"], "body": [r"yii\.js", r"yii\\"]},
+    {"name": "Zend/Laminas", "body": [r"Laminas\\", r"Zend\\", r"ZendFramework"]},
+    {"name": "TYPO3", "cookies": ["fe_typo_user", "be_typo_user"], "body": [r"/typo3conf/", r"/typo3temp/", r'name="generator" content="TYPO3'],
+     "paths": {"/typo3/": r"TYPO3"}},
+    {"name": "PrestaShop", "cookies": ["PrestaShop-"], "body": [r"prestashop", r"/modules/ps_"],
+     "paths": {"/img/prestashop.ico": None}},
+    {"name": "OpenCart", "cookies": ["OCSESSID"], "body": [r"catalog/view/theme", r"route=common/home"]},
+    {"name": "Shopware", "cookies": ["sw-", "session-"], "body": [r"shopware", r"/bundles/storefront/"]},
+    {"name": "Craft CMS", "cookies": ["CraftSessionId", "CRAFT_CSRF_TOKEN"], "headers": {"x-powered-by": "Craft CMS"}},
+    {"name": "Statamic", "cookies": ["statamic_"], "body": [r"statamic"]},
+    {"name": "OctoberCMS/Winter", "cookies": ["october_session", "winter_session"]},
+    {"name": "Concrete CMS", "cookies": ["CONCRETE5"], "body": [r"/concrete/", r"ccm-"]},
+    {"name": "SilverStripe", "body": [r"/_resources/", r"silverstripe"], "headers": {"x-powered-by": "SilverStripe"}},
+    {"name": "Grav", "cookies": ["grav-site-"], "body": [r"/user/themes/", r"grav"]},
+    {"name": "MediaWiki", "cookies": ["re:\\bwiki\\w*_session=", "re:\\bwiki\\w*UserID="], "body": [r"mediawiki", r"/load\.php\?", r'name="generator" content="MediaWiki'],
+     "paths": {"/api.php": r"MediaWiki API", "/w/api.php": r"MediaWiki API"},
+     "version": r'name="generator" content="MediaWiki ([\d.]+)'},
+    {"name": "Moodle", "cookies": ["MoodleSession"], "body": [r"moodle", r"/theme/boost/"]},
+    {"name": "Nextcloud/ownCloud", "cookies": ["oc_sessionPassphrase", "nc_session_id", "ocXX"],
+     "paths": {"/status.php": r'"installed":true', "/nextcloud/status.php": r'"installed":true'},
+     "version": r'"versionstring":"([\d.]+)"'},
+    {"name": "phpMyAdmin", "cookies": ["phpMyAdmin", "pma_lang", "pmaCookieVer"],
+     "paths": {"/phpmyadmin/": r"phpMyAdmin", "/pma/": r"phpMyAdmin", "/phpMyAdmin/": r"phpMyAdmin"},
+     "version": r"phpMyAdmin ([\d.]+)"},
+    {"name": "Adminer", "paths": {"/adminer.php": r"Adminer", "/adminer/": r"Adminer"}, "version": r"Adminer ([\d.]+)"},
+    {"name": "Roundcube", "cookies": ["roundcube_sessid", "roundcube_sessauth"], "body": [r"roundcube"],
+     "paths": {"/roundcube/": r"roundcube", "/webmail/": r"roundcube"}},
+    {"name": "Matomo/Piwik", "cookies": ["MATOMO_SESSID", "PIWIK_SESSID"], "body": [r"matomo\.js", r"piwik\.js"],
+     "paths": {"/matomo.php": None, "/piwik.php": None}},
+    {"name": "phpBB", "cookies": ["phpbb3_", "phpbb_"], "body": [r"phpBB"]},
+    {"name": "XenForo", "cookies": ["xf_session", "xf_csrf"], "body": [r"XenForo"]},
+    {"name": "vBulletin", "cookies": ["bb_sessionhash", "bbsessionhash"], "body": [r"vBulletin"]},
+    {"name": "MyBB", "cookies": ["mybb["], "body": [r"MyBB"]},
+    {"name": "Zabbix", "cookies": ["zbx_session"], "body": [r"zabbix"]},
+    {"name": "GLPI", "cookies": ["glpi_"], "body": [r"/glpi/", r"GLPI"]},
+    {"name": "Dolibarr", "cookies": ["DOLSESSID_"], "body": [r"dolibarr"]},
+    {"name": "SuiteCRM/SugarCRM", "cookies": ["sugar_user_theme", "ck_login_id_20"], "body": [r"SuiteCRM", r"SugarCRM"]},
+    {"name": "Mautic", "cookies": ["mautic_session", "mtc_id"], "body": [r"mautic"]},
+    {"name": "Limesurvey", "cookies": ["LS-"], "body": [r"limesurvey"]},
+    {"name": "Kirby", "cookies": ["kirby_session"]},
+    {"name": "ProcessWire", "cookies": ["wire", "wires"], "body": [r"processwire"]},
+    {"name": "Bolt CMS", "cookies": ["bolt_session"]},
+    {"name": "Elgg", "cookies": ["Elgg"]},
+    {"name": "osTicket", "cookies": ["OSTSESSID"]},
+    {"name": "Froxlor/ISPConfig/Plesk", "cookies": ["PLESKSESSID", "ispconfig"], "body": [r"froxlor", r"ispconfig", r"plesk"]},
+    {"name": "cPanel/WHM (PHP-interface)", "cookies": ["cpsession", "whostmgrsession"]},
+]
+
+# Gevoelige bestanden die niet publiek horen te zijn. Alleen aanwezigheid wordt
+# gemeld; inhoud wordt niet getoond.
+EXPOSURE_CHECKS = [
+    ("/.env",                            r"APP_KEY=|DB_PASSWORD=|APP_ENV=",      "Laravel/.env publiek (secrets!)"),
+    ("/composer.json",                   r'"require"',                          "composer.json publiek (pakketlijst)"),
+    ("/composer.lock",                   r'"packages"',                         "composer.lock publiek (exacte versies)"),
+    ("/vendor/composer/installed.json",  r'"name"\s*:',                         "vendor/composer/installed.json publiek"),
+    ("/.git/HEAD",                       r"^ref: refs/",                         "git-repository publiek (.git/HEAD)"),
+    ("/wp-config.php.bak",               r"DB_PASSWORD",                         "wp-config.php backup publiek (secrets!)"),
+    ("/config.php.bak",                  r"password|passwd",                     "config.php backup publiek"),
+    ("/server-status",                   r"Apache Server Status",                "Apache server-status publiek"),
+    ("/.user.ini",                       r"^\s*[a-z_.]+\s*=",                    ".user.ini publiek"),
+]
+
+# PHP-versie-eis uit composer-bestanden ("php": ">=8.1") → geeft een branch-hint
+COMPOSER_PHP_RE = re.compile(r'"php"\s*:\s*"[^\d]*(\d+\.\d+)')
+GENERATOR_RE = re.compile(r'<meta[^>]+name=["\']generator["\'][^>]+content=["\']([^"\']+)', re.I)
+
+
+def match_app_signatures(headers, body):
+    """Geeft {appnaam: bewijs} voor alle signatures die op deze response matchen."""
+    hits = {}
+    sc = headers.get("set-cookie", "")
+    for sig in APP_SIGNATURES:
+        for c in sig.get("cookies", []):
+            pat = c[3:] if c.startswith("re:") else re.escape(c)
+            if re.search(pat, sc):
+                hits.setdefault(sig["name"], f"cookie {c}")
+        for hname, sub in sig.get("headers", {}).items():
+            hv = headers.get(hname)
+            if hv is not None and sub.lower() in hv.lower():
+                hits.setdefault(sig["name"], f"header {hname}")
+        if body:
+            for rx in sig.get("body", []):
+                if re.search(rx, body, re.I):
+                    hits.setdefault(sig["name"], "html-inhoud")
+                    break
+    return hits
+
+
+def app_version_from_body(name, body):
+    for sig in APP_SIGNATURES:
+        if sig["name"] == name and sig.get("version") and body:
+            m = re.search(sig["version"], body, re.I)
+            if m:
+                return next((g for g in m.groups() if g), None)
+    return None
+
+
 def detect_edge(headers):
     """Welke CDN/WAF/proxy staat ervoor? Lege lijst = niets herkend."""
     found = []
@@ -193,9 +314,18 @@ def detect_edge(headers):
 
 
 def extract_signals(status, headers, body, path):
-    """Zoekt naar PHP-aanwijzingen en versies in headers en body."""
+    """Zoekt naar PHP-aanwijzingen, versies en bekende apps in headers en body.
+    Retourneert (versions, signals, apps{naam: {"bewijs":..., "versie":...}})."""
     versions = set()
     signals = []
+    apps = {}
+
+    for name, evidence in match_app_signatures(headers, body).items():
+        apps[name] = {"bewijs": f"{path}: {evidence}", "versie": app_version_from_body(name, body)}
+    if body:
+        m = GENERATOR_RE.search(body)
+        if m and not any(a.lower() in m.group(1).lower() for a in apps):
+            signals.append(f"meta generator: {m.group(1)[:50]}")
 
     xpb = headers.get("x-powered-by", "")
     if xpb:
@@ -228,16 +358,8 @@ def extract_signals(status, headers, body, path):
         if path == "/" or path.endswith(".php") or path.endswith("/"):
             if re.search(r'href=["\'][^"\']*\.php', body) and "PHP" not in " ".join(signals):
                 signals.append("Links naar .php-bestanden in HTML")
-        if "/wp-content/" in body or "/wp-includes/" in body:
-            signals.append("WordPress gedetecteerd (draait op PHP)")
-        if "Joomla" in body and "administrator" in path:
-            signals.append("Joomla gedetecteerd (draait op PHP)")
-        if "Drupal" in body or "drupal.js" in body:
-            signals.append("Drupal gedetecteerd (draait op PHP)")
-        if path == "/magento_version" and status == 200 and "Magento" in body:
-            signals.append(f"Magento gedetecteerd: {body.strip()[:60]}")
 
-    return versions, signals
+    return versions, signals, apps
 
 
 def behavioural_probes(base, timeout, insecure, origin_ip):
@@ -276,6 +398,56 @@ def behavioural_probes(base, timeout, insecure, origin_ip):
     return versions, signals
 
 
+def app_probes(base, timeout, insecure, origin_ip, known_apps, delay):
+    """
+    Bevestigt bekende apps via hun eigen paden (alleen voor apps die al
+    vermoed worden, of die alleen via een pad herkenbaar zijn) en controleert
+    op publiek staande gevoelige bestanden.
+    Retourneert (versions, signals, apps, exposures).
+    """
+    versions, signals, apps, exposures = set(), [], {}, []
+    # Apps die geen cookie/body-signature hebben en dus alleen via pad te vinden zijn
+    path_only = {sig["name"] for sig in APP_SIGNATURES if not sig.get("cookies") and not sig.get("body") and not sig.get("headers")}
+    for sig in APP_SIGNATURES:
+        if not sig.get("paths"):
+            continue
+        if sig["name"] not in known_apps and sig["name"] not in path_only:
+            continue
+        for p, rx in sig["paths"].items():
+            try:
+                st, h, b = fetch(base, p, timeout, insecure, origin_ip)
+            except (OSError, http.client.HTTPException, ValueError):
+                continue
+            if st == 200 and (rx is None or re.search(rx, b, re.I)):
+                ver = app_version_from_body(sig["name"], b)
+                cur = apps.setdefault(sig["name"], {"bewijs": f"{p}: pad bevestigd", "versie": None})
+                if ver and not cur["versie"]:
+                    cur["versie"] = ver
+                if sig["name"] == "phpMyAdmin" or sig["name"] == "Adminer":
+                    exposures.append(f"{sig['name']} publiek bereikbaar op {p} (!!)")
+            # Nextcloud status.php, composer e.d. kunnen PHP-eisen bevatten
+            for m in VERSION_RE.finditer(h.get("x-powered-by", "")):
+                versions.add(m.group(1))
+            if delay:
+                time.sleep(delay)
+
+    for p, rx, label in EXPOSURE_CHECKS:
+        try:
+            st, h, b = fetch(base, p, timeout, insecure, origin_ip)
+        except (OSError, http.client.HTTPException, ValueError):
+            continue
+        looks_html = re.search(r"<(!doctype|html|head|body)\b", b[:2000], re.I) is not None
+        if st == 200 and re.search(rx, b, re.I | re.M) and (not looks_html or p == "/server-status"):
+            exposures.append(f"{label} op {p}")
+            m = COMPOSER_PHP_RE.search(b)
+            if m and p.startswith(("/composer", "/vendor")):
+                signals.append(f"composer eist php {m.group(1)}+ (branch-hint, geen exacte versie)")
+        if delay:
+            time.sleep(delay)
+
+    return versions, signals, apps, exposures
+
+
 def normalize_targets(raw, global_origin=None):
     """Geeft lijst van (base_url, origin_ip|None)."""
     out = []
@@ -307,7 +479,7 @@ def label_of(base, origin_ip):
     return f"{base} (origin {origin_ip})" if origin_ip else base
 
 
-def scan_target(base, origin_ip, paths, timeout, insecure, delay, behaviour):
+def scan_target(base, origin_ip, paths, timeout, insecure, delay, behaviour, apps_on):
     result = {
         "target": label_of(base, origin_ip),
         "url": base,
@@ -315,6 +487,8 @@ def scan_target(base, origin_ip, paths, timeout, insecure, delay, behaviour):
         "reachable": False,
         "php_detected": False,
         "edge": [],
+        "apps": {},
+        "exposures": [],
         "versions": [],
         "signals": [],
         "status": "ONBEREIKBAAR",
@@ -334,9 +508,13 @@ def scan_target(base, origin_ip, paths, timeout, insecure, delay, behaviour):
             result["reachable"] = True
             if p == "/":
                 result["edge"] = detect_edge(headers)
-            vs, sg = extract_signals(status, headers, body, p)
+            vs, sg, ap = extract_signals(status, headers, body, p)
             all_versions |= vs
             add_signals(p, sg)
+            for name, info in ap.items():
+                cur = result["apps"].setdefault(name, info)
+                if info.get("versie") and not cur.get("versie"):
+                    cur["versie"] = info["versie"]
         except (OSError, http.client.HTTPException, ValueError) as e:
             msg = str(getattr(e, "reason", e)) or e.__class__.__name__
             result["errors"].append(f"{p}: {msg}")
@@ -350,9 +528,19 @@ def scan_target(base, origin_ip, paths, timeout, insecure, delay, behaviour):
         all_versions |= vs
         add_signals("gedrag", sg)
 
+    if result["reachable"] and apps_on:
+        vs, sg, ap, ex = app_probes(base, timeout, insecure, origin_ip, set(result["apps"]), delay)
+        all_versions |= vs
+        add_signals("apps", sg)
+        for name, info in ap.items():
+            cur = result["apps"].setdefault(name, info)
+            if info.get("versie") and not cur.get("versie"):
+                cur["versie"] = info["versie"]
+        result["exposures"] = ex
+
     result["versions"] = sorted(all_versions, key=lambda v: parse_version(v) or (0, 0, 0))
     result["signals"] = all_signals
-    result["php_detected"] = bool(all_versions or all_signals)
+    result["php_detected"] = bool(all_versions or all_signals or result["apps"])
     return result
 
 
@@ -411,6 +599,11 @@ def print_report(results, fixed_map):
         print(f"{r['target']:<{w}}  {r['status']:<24} versie: {ver}")
         if r["edge"]:
             print(f"{'':<{w}}  ▸ edge/WAF: {', '.join(r['edge'])}")
+        if r["apps"]:
+            apps = ", ".join(f"{n} {i['versie']}" if i.get("versie") else n for n, i in r["apps"].items())
+            print(f"{'':<{w}}  ▸ PHP-apps: {apps}")
+        for e in r["exposures"]:
+            print(f"{'':<{w}}  ⚠ {e}")
         if r["detail"]:
             print(f"{'':<{w}}  └ {r['detail']}")
         for s in r["signals"][:5]:
@@ -439,6 +632,7 @@ def main():
     ap.add_argument("--insecure", action="store_true", help="TLS-certificaten niet valideren")
     ap.add_argument("--quick", action="store_true", help="alleen / en /index.php proberen")
     ap.add_argument("--no-behaviour", action="store_true", help="gedragsfingerprints (.php vs .txt, easter egg) overslaan")
+    ap.add_argument("--no-apps", action="store_true", help="app-herkenning en exposure-checks (.env, composer, .git) overslaan")
     ap.add_argument("--path", action="append", default=[], help="extra pad om te proberen (herhaalbaar)")
     ap.add_argument("--fixed", action="append", default=[],
                     help="override gefixte versie, bv. --fixed 8.4=8.4.27 (herhaalbaar)")
@@ -470,7 +664,7 @@ def main():
     results = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.concurrency) as ex:
         futs = [ex.submit(scan_target, base, origin, paths, args.timeout, args.insecure,
-                          args.delay, not args.no_behaviour) for base, origin in targets]
+                          args.delay, not args.no_behaviour, not args.no_apps) for base, origin in targets]
         for fut in concurrent.futures.as_completed(futs):
             r = finalize(fut.result(), fixed_map)
             results.append(r)
@@ -488,10 +682,11 @@ def main():
     if args.csv:
         with open(args.csv, "w", newline="", encoding="utf-8") as fh:
             wr = csv.writer(fh)
-            wr.writerow(["target", "status", "versies", "edge", "detail", "signalen"])
+            wr.writerow(["target", "status", "versies", "edge", "apps", "exposures", "detail", "signalen"])
             for r in results:
-                wr.writerow([r["target"], r["status"], " ".join(r["versions"]),
-                             ", ".join(r["edge"]), r["detail"], " | ".join(r["signals"])])
+                apps = ", ".join(f"{n} {i['versie']}" if i.get("versie") else n for n, i in r["apps"].items())
+                wr.writerow([r["target"], r["status"], " ".join(r["versions"]), ", ".join(r["edge"]),
+                             apps, " | ".join(r["exposures"]), r["detail"], " | ".join(r["signals"])])
         print(f"CSV geschreven naar {args.csv}")
 
     bad = any(r["status"].startswith("KWETSBAAR") or r["status"] == "WAARSCHIJNLIJK-KWETSBAAR" for r in results)
